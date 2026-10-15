@@ -41,7 +41,10 @@ function zodType(z: any, p: ActionDef['params'][number]): any {
       // OneBot 的 message 类型：字符串（CQ 码）或消息段数组/对象
       return z.union([z.string(), z.array(z.any()), z.record(z.any())])
     default:
-      return z.string()
+      // 字符串参数同样放宽接受数字：群号、QQ 号这类「按字符串发送」的参数
+      // （如 NapCat 群签到要求 group_id 为 string），模型几乎总是给数字，
+      // 若在此处拒绝，coerceArgs 的转换逻辑就永远没有机会执行。
+      return z.union([z.string(), z.number()])
   }
 }
 
@@ -88,13 +91,27 @@ export function buildSchema(def: ActionDef, z: any): any {
   return z.object(shape)
 }
 
-// 工具描述：接口用途 + 返回值 + 危险操作提醒
-export function buildDescription(def: ActionDef): string {
+// 该接口声明了 verifyWith 时，返回验证提示。
+// 若被指向的验证接口本身没开启，提示会变成空头支票（模型会去调用一个不存在的工具），
+// 因此这里要求它确实在本次注册的工具集合中。
+export function verifyHint(def: ActionDef, available?: Set<string>): string {
+  if (!def.verifyWith) return ''
+  const target = toolName(def.verifyWith)
+  if (available && !available.has(target)) return ''
+  return `如需确认，请调用 ${target} 核实。`
+}
+
+// 工具描述：接口用途 + 返回值 + 无返回接口的验证指引 + 危险操作提醒
+export function buildDescription(def: ActionDef, available?: Set<string>): string {
   const parts: string[] = [def.description]
   if (def.extension) {
     parts.push('（非 OneBot v11 标准接口，属于 go-cqhttp 扩展层，部分协议端可能不支持）')
   }
   if (def.returns) parts.push(`返回：${def.returns}`)
+  const hint = verifyHint(def, available)
+  if (hint) {
+    parts.push(`⚠️ 本接口不返回结果，协议端未报错并不等于操作真的生效。${hint}`)
+  }
   if (def.danger) {
     parts.push(
       '⚠️ 此操作具有破坏性或涉及敏感信息，调用前必须确认用户确实要求执行该操作，不要擅自调用。',
@@ -199,10 +216,28 @@ function validateRequired(def: ActionDef, args: ActionArgs): string | null {
   return null
 }
 
-// 结果序列化：限制长度，避免超长返回（如群成员列表）撑爆模型上下文
-export function stringifyResult(value: any, maxLength: number): string {
-  if (value === undefined || value === null) return '操作成功，无返回数据。'
+// 结果序列化：限制长度，避免超长返回（如群成员列表）撑爆模型上下文。
+//
+// def 用于在接口不返回数据时给出诚实的措辞：协议端接受了请求（retcode 为 0）
+// 并不等于操作真的生效，因此不能说「操作成功」。对这类接口，若声明了
+// verifyWith，则直接指引模型去调用验证接口。
+export function stringifyResult(
+  value: any,
+  maxLength: number,
+  def?: ActionDef,
+  available?: Set<string>,
+): string {
+  const empty = (): string => {
+    const parts = ['协议端已接受请求，但该接口不返回结果，无法据此判断操作是否真正生效。']
+    const hint = def ? verifyHint(def, available) : ''
+    if (hint) parts.push(hint)
+    return parts.join('')
+  }
+
+  if (value === undefined || value === null) return empty()
   if (typeof value === 'string') {
+    // 部分协议端对无返回接口回一个空串，同样不能当作成功
+    if (!value.trim()) return empty()
     return value.length > maxLength ? value.slice(0, maxLength) + '…（内容过长已截断）' : value
   }
   let text: string
@@ -211,7 +246,7 @@ export function stringifyResult(value: any, maxLength: number): string {
   } catch {
     text = String(value)
   }
-  if (text === undefined) return '操作成功，无返回数据。'
+  if (text === undefined) return empty()
   if (text.length <= maxLength) return text
   return text.slice(0, maxLength) + `…（返回数据过长已截断，原始长度 ${text.length} 字符）`
 }
@@ -223,6 +258,8 @@ export interface ToolDeps {
   log: { warn: (...args: any[]) => void; debug: (...args: any[]) => void }
   // 已解析好的 @langchain/core 与 zod（由入口在注册前解析一次并复用）
   runtime: LangChainRuntime
+  // 本次实际注册的工具名集合，用于判断 verifyWith 指向的接口是否可用
+  available?: Set<string>
 }
 
 // 为一个接口创建 ChatLuna 工具实例
@@ -232,7 +269,7 @@ export function createTool(def: ActionDef, deps: ToolDeps) {
 
   return new DynamicStructuredTool({
     name: toolName(def.action),
-    description: buildDescription(def),
+    description: buildDescription(def, deps.available),
     schema: buildSchema(def, runtime.z),
     func: async (...callArgs: any[]): Promise<string> => {
       const session = extractSession(callArgs)
@@ -262,7 +299,7 @@ export function createTool(def: ActionDef, deps: ToolDeps) {
           ctx.bots.find((b: any) => b.internal || b.onebot) ??
           ctx.bots[0]
         const data = await callOneBot(bot, def, args, log)
-        return stringifyResult(data, deps.maxResultLength)
+        return stringifyResult(data, deps.maxResultLength, def, deps.available)
       } catch (e) {
         const msg = (e as Error)?.message ?? String(e)
         log.warn('工具 %s 调用失败：%s', def.action, msg)

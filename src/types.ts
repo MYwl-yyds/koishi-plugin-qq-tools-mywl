@@ -64,6 +64,11 @@ export interface ActionDef {
   paramAliases?: Record<string, string>
   // 返回数据说明（写进工具描述，帮助模型理解返回值）
   returns?: string
+  // 该接口不返回数据、且「协议端没报错」并不代表操作真正生效时，填写可用于
+  // 验证的接口名。调用无返回时会提示模型改用该接口确认，避免模型把
+  // 「retcode 为 0」误当成「操作成功」。
+  // 例：群签到（NapCat 的 GroupSign 返回 void，静默失败也无从得知）。
+  verifyWith?: string
   // 该接口属于 go-cqhttp 扩展层（非 OneBot v11 标准），仅在支持的框架上可用
   extension?: boolean
 }

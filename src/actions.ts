@@ -30,6 +30,19 @@ const USER_ID = (description = '目标 QQ 号'): ActionDef['params'][number] => 
   description,
 })
 
+// 与 GROUP_ID 相同，但按字符串发送。
+//
+// 用于协议端 schema 严格要求字符串的接口：NapCat 的群签到（SetGroupSign）
+// 声明的是 group_id: Type.String()，而它自己的其他接口都用 number|string。
+// 数字在部分版本上会被 schema 校验拒绝，字符串则两类实现都能接受。
+const STRING_GROUP_ID = (description = '群号'): ActionDef['params'][number] => ({
+  name: 'group_id',
+  type: 'string',
+  required: true,
+  description: `${description}。省略时默认使用当前会话所在群`,
+  autoFill: 'group',
+})
+
 const MESSAGE = (): ActionDef['params'][number] => ({
   name: 'message',
   type: 'message',
@@ -258,9 +271,16 @@ const MESSAGE_ACTIONS: ActionDef[] = [
     action: 'send_group_sign',
     group: 'message',
     title: '群签到',
-    description: '在指定群完成签到打卡。',
-    params: [GROUP_ID()],
+    description:
+      '在指定群完成签到打卡。注意：该接口在协议端不返回任何数据，调用成功不代表一定签到成功。',
+    // NapCat 把 set_group_sign 与 send_group_sign 注册为同一实现的两个名字，
+    // LLBot 只注册 send_group_sign，因此用后者作主名、前者作别名。
+    // 群号按字符串发送：NapCat 该接口的 schema 严格要求 string。
+    params: [STRING_GROUP_ID()],
+    aliases: ['set_group_sign'],
     extension: true,
+    returns: '无返回数据（接口本身不返回结果）',
+    verifyWith: 'get_group_signed_list',
   },
   {
     action: 'set_msg_emoji_like',
@@ -422,6 +442,16 @@ const QUERY_ACTIONS: ActionDef[] = [
     aliases: ['_get_group_notice'],
     extension: true,
     returns: '[ { sender_id, publish_time, message: { text, images } } ]',
+  },
+  {
+    action: 'get_group_signed_list',
+    group: 'query',
+    title: '获取群打卡列表',
+    description:
+      '获取指定群今日的打卡（签到）名单，可用于确认群签到是否真的生效。返回打卡者 QQ、昵称、打卡时间与排名。',
+    params: [GROUP_ID()],
+    extension: true,
+    returns: '[ { user_id, nick, time, rank } ]（NapCat / LLBot 均支持）',
   },
 ]
 

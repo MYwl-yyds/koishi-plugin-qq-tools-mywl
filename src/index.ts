@@ -67,6 +67,8 @@ export function apply(ctx: Context, config: PluginConfig) {
     maxResultLength: MAX_RESULT_LENGTH,
     log,
     runtime,
+    // verifyWith 指向的接口必须真的注册了，提示才有效
+    available: new Set(selected.map((d) => toolName(d.action))),
   }
 
   const groupLabel = new Map(GROUPS.map((g) => [g.key, g.label]))

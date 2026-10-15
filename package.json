@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-qq-tools-mywl",
   "description": "[插件由AI生成]QQ工具集：把 OneBot v11 全部内置接口（含 NapCat/LLBot 扩展接口）转写为 ChatLuna 可调用的模型工具，每个工具一个独立开关，危险操作默认关闭；适配 NapCat / LLBot / go-cqhttp 等协议端",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "files": [
